@@ -37,7 +37,7 @@ What is Kickstart?
       - https://learnxinyminutes.com/docs/lua/
 
     After understanding a bit more about Lua, you can use `:help lua-guide` as a
-    reference for how Neovim integrates Lua.
+    reference for how Neovim integrates Lua
     - :help lua-guide
     - (or HTML version): https://neovim.io/doc/user/lua-guide.html
 
@@ -84,6 +84,9 @@ I hope you enjoy your Neovim journey,
 P.S. You can delete this when you're done too. It's your config now! :)
 --]]
 
+-- Tell neovim exactly which Python executable to use for plugins
+vim.g.python3_host_prog = '/home/christopher-jones/.local/bin/pynvim-python'
+
 -- Set <space> as the leader key
 -- See `:help mapleader`
 --  NOTE: Must happen before plugins are loaded (otherwise wrong leader will be used)
@@ -102,7 +105,7 @@ vim.g.have_nerd_font = false
 vim.o.number = true
 -- You can also add relative line numbers, to help with jumping.
 --  Experiment for yourself to see if you like it!
--- vim.o.relativenumber = true
+vim.o.relativenumber = true
 
 -- Enable mouse mode, can be useful for resizing splits for example!
 vim.o.mouse = 'a'
@@ -117,6 +120,9 @@ vim.o.showmode = false
 vim.schedule(function()
   vim.o.clipboard = 'unnamedplus'
 end)
+
+-- Save undo history
+vim.o.undofile = true
 
 -- Enable break indent
 vim.o.breakindent = true
@@ -168,7 +174,7 @@ vim.o.confirm = true
 
 -- [[ Basic Keymaps ]]
 --  See `:help vim.keymap.set()`
-
+require 'custom.remap'
 -- Clear highlights on search when pressing <Esc> in normal mode
 --  See `:help hlsearch`
 vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
@@ -189,6 +195,89 @@ vim.keymap.set('t', '<Esc><Esc>', '<C-\\><C-n>', { desc = 'Exit terminal mode' }
 -- vim.keymap.set('n', '<right>', '<cmd>echo "Use l to move!!"<CR>')
 -- vim.keymap.set('n', '<up>', '<cmd>echo "Use k to move!!"<CR>')
 -- vim.keymap.set('n', '<down>', '<cmd>echo "Use j to move!!"<CR>')
+
+-- Run current Python file in a split terminal
+vim.keymap.set('n', '<leader>r', function()
+  local python_cmd = 'python3 ' .. vim.fn.expand '%' .. '\n'
+  local term_buf = nil
+  local term_win = nil
+  -- Look for an existing split terminal
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.bo[buf].buftype == 'terminal' then
+      term_buf = buf
+      term_win = win
+      break
+    end
+  end
+
+  if term_buf then
+    -- Reuse existing terminal
+    local job = vim.b[term_buf].terminal_job_id
+    if job then
+      vim.fn.chansend(job, 'clear\n')
+      vim.fn.chansend(job, python_cmd)
+      return
+    end
+  end
+
+  -- Create new split terminal
+  vim.cmd 'split | terminal'
+  term_win = vim.api.nvim_get_current_win()
+  term_buf = vim.api.nvim_get_current_buf()
+
+  -- Do not unload on exit
+  vim.api.nvim_set_option_value('bufhidden', 'hide', { buf = term_buf })
+
+  -- Run python file
+  local job = vim.b[term_buf].terminal_job_id
+  vim.fn.chansend(job, python_cmd)
+
+  -- Move cursor back to code window
+  vim.cmd 'wincmd h'
+end, { desc = 'Run Python file' })
+
+-- Run current Python file and focus terminal for input
+vim.keymap.set('n', '<leader>R', function()
+  local python_cmd = 'python3 ' .. vim.fn.expand '%' .. '\n'
+  local term_buf = nil
+  local term_win = nil
+
+  -- Look for an existing terminal
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.bo[buf].buftype == 'terminal' then
+      term_buf = buf
+      term_win = win
+      break
+    end
+  end
+
+  if term_buf then
+    -- Reuse it
+    local job = vim.b[term_buf].terminal_job_id
+    if job then
+      vim.fn.chansend(job, 'clear\n')
+      vim.fn.chansend(job, python_cmd)
+      vim.api.nvim_set_current_win(term_win) -- jump to terminal for input
+      return
+    end
+  end
+
+  -- Create new split terminal
+  vim.cmd 'split | terminal'
+  term_win = vim.api.nvim_get_current_win()
+  term_buf = vim.api.nvim_get_current_buf()
+
+  vim.api.nvim_set_option_value('bufhidden', 'hide', { buf = term_buf })
+
+  -- Run program
+  local job = vim.b[term_buf].terminal_job_id
+  vim.fn.chansend(job, python_cmd)
+
+  -- Move cursor into terminal for input
+  vim.api.nvim_set_current_win(term_win)
+end, { desc = 'Run Python (with input)' })
 
 -- Keybinds to make split navigation easier.
 --  Use CTRL+<hjkl> to switch between windows
@@ -670,10 +759,24 @@ require('lazy').setup({
       --  - capabilities (table): Override fields in capabilities. Can be used to disable certain LSP features.
       --  - settings (table): Override the default settings passed when initializing the server.
       --        For example, to see the options for `lua_ls`, you could go to: https://luals.github.io/wiki/settings/
+
+      -- LSP servers table
       local servers = {
         -- clangd = {},
         -- gopls = {},
-        -- pyright = {},
+        pyright = {
+          settings = {
+            python = {
+              analysis = {
+                autoSearchPaths = true,
+                useLibraryCodeForTypes = true,
+                typeCheckingMode = 'basic',
+              },
+            },
+          },
+        },
+        ruff = {},
+
         -- rust_analyzer = {},
         -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
         --
@@ -716,6 +819,7 @@ require('lazy').setup({
       local ensure_installed = vim.tbl_keys(servers or {})
       vim.list_extend(ensure_installed, {
         'stylua', -- Used to format Lua code
+        'ruff',
       })
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
@@ -768,6 +872,7 @@ require('lazy').setup({
       end,
       formatters_by_ft = {
         lua = { 'stylua' },
+        python = { 'black' },
         -- Conform can also run multiple formatters sequentially
         -- python = { "isort", "black" },
         --
@@ -876,27 +981,28 @@ require('lazy').setup({
     },
   },
 
-  { -- You can easily change to a different colorscheme.
-    -- Change the name of the colorscheme plugin below, and then
-    -- change the command in the config to whatever the name of that colorscheme is.
-    --
-    -- If you want to see what colorschemes are already installed, you can use `:Telescope colorscheme`.
-    'folke/tokyonight.nvim',
-    priority = 1000, -- Make sure to load this before all the other start plugins.
-    config = function()
-      ---@diagnostic disable-next-line: missing-fields
-      require('tokyonight').setup {
-        styles = {
-          comments = { italic = false }, -- Disable italics in comments
-        },
-      }
+  -- { -- You can easily change to a different colorscheme.
+  -- Change the name of the colorscheme plugin below, and then
+  -- change the command in the config to whatever the name of that colorscheme is.
 
-      -- Load the colorscheme here.
-      -- Like many other themes, this one has different styles, and you could load
-      -- any other, such as 'tokyonight-storm', 'tokyonight-moon', or 'tokyonight-day'.
-      vim.cmd.colorscheme 'tokyonight-night'
-    end,
-  },
+  -- If you want to see what colorschemes are already installed, you can use `:Telescope colorscheme`.
+  -- 'folke/tokyonight.nvim',
+  -- priority = 1000, -- Make sure to load this before all the other start plugins.
+  -- config = function()
+  --@diagnostic disable-next-line: missing-fields
+  -- require('tokyonight').setup {
+  -- styles = {
+  --  comments = { italic = false }, -- Disable italics in comments
+  --  },
+  --  }
+
+  -- Load the colorscheme here.
+  -- Like many other themes, this one has different styles, and you could load
+  -- any other, such as 'tokyonight-storm', 'tokyonight-moon', or 'tokyonight-day'.
+  -- vim.cmd.colorscheme 'tokyonight-night'
+  -- vim.cmd.colorscheme 'rose-pine'
+  -- end
+  -- }
 
   -- Highlight todo, notes, etc in comments
   { 'folke/todo-comments.nvim', event = 'VimEnter', dependencies = { 'nvim-lua/plenary.nvim' }, opts = { signs = false } },
@@ -975,17 +1081,20 @@ require('lazy').setup({
   --
   -- require 'kickstart.plugins.debug',
   -- require 'kickstart.plugins.indent_line',
-  -- require 'kickstart.plugins.lint',
+  require 'kickstart.plugins.lint',
   -- require 'kickstart.plugins.autopairs',
   -- require 'kickstart.plugins.neo-tree',
   -- require 'kickstart.plugins.gitsigns', -- adds gitsigns recommend keymaps
-
   -- NOTE: The import below can automatically add your own plugins, configuration, etc from `lua/custom/plugins/*.lua`
   --    This is the easiest way to modularize your config.
   --
   --  Uncomment the following line and add your plugins to `lua/custom/plugins/*.lua` to get going.
-  -- { import = 'custom.plugins' },
-  --
+  { import = 'custom.plugins' },
+  -- Ensure Neovim can find pipx-installed binaries like ruff-lsp
+  vim.schedule(function()
+    vim.env.PATH = (vim.env.PATH or '') .. ':' .. os.getenv 'HOME' .. '/.local/bin'
+  end),
+
   -- For additional information with loading, sourcing and examples see `:help lazy.nvim-🔌-plugin-spec`
   -- Or use telescope!
   -- In normal mode type `<space>sh` then write `lazy.nvim-plugin`
